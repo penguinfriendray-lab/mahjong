@@ -1,0 +1,576 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+import time
+import math
+import random
+
+class JapaneseMahjong:
+    """日本麻將計算核心 - 完整版"""
+    
+    SUIT_NAMES = {'m': '萬', 'p': '筒', 's': '索', 'z': '字'}
+    DRAGONS = {5: '白', 6: '發', 7: '中'}
+    WINDS = {1: '東', 2: '南', 3: '西', 4: '北'}
+    
+    YAKU_TABLE = {
+        '立直': {'fan': 1, 'display': '立直 (1番)'},
+        '兩立直': {'fan': 2, 'display': '兩立直 (2番)'},
+        '門前清自摸和': {'fan': 1, 'display': '門前清自摸和 (1番)'},
+        '斷幺九': {'fan': 1, 'display': '斷幺九 (1番)'},
+        '平和': {'fan': 1, 'display': '平和 (1番)'},
+        '一盃口': {'fan': 1, 'display': '一盃口 (1番)'},
+        '白': {'fan': 1, 'display': '白 (1番)'},
+        '發': {'fan': 1, 'display': '發 (1番)'},
+        '中': {'fan': 1, 'display': '中 (1番)'},
+        '風子（自風）': {'fan': 1, 'display': '自風 (1番)'},
+        '風子（場風）': {'fan': 1, 'display': '場風 (1番)'},
+        
+        '三色同順': {'fan': 2, 'display': '三色同順 (2番)'},
+        '一氣通貫': {'fan': 2, 'display': '一氣通貫 (2番)'},
+        '混全帯幺九': {'fan': 2, 'display': '混全帯幺九 (2番)'},
+        '七對子': {'fan': 2, 'display': '七對子 (2番)'},
+        '対々和': {'fan': 2, 'display': '対々和 (2番)'},
+        '三暗刻': {'fan': 2, 'display': '三暗刻 (2番)'},
+        '三色同刻': {'fan': 2, 'display': '三色同刻 (2番)'},
+        '混老頭': {'fan': 2, 'display': '混老頭 (2番)'},
+        '小三元': {'fan': 2, 'display': '小三元 (2番)'},
+        
+        '混一色': {'fan': 3, 'display': '混一色 (3番)'},
+        '二盃口': {'fan': 3, 'display': '二盃口 (3番)'},
+        '純全帯幺九': {'fan': 3, 'display': '純全帯幺九 (3番)'},
+        
+        '清一色': {'fan': 6, 'display': '清一色 (6番)'},
+    }
+
+    BASE_POINTS = {
+        1: {'tsumo': 1000, 'ron': 2000},
+        2: {'tsumo': 2000, 'ron': 4000},
+        3: {'tsumo': 3900, 'ron': 5800},
+        4: {'tsumo': 7700, 'ron': 7700},
+        5: {'tsumo': 8000, 'ron': 8000},
+        6: {'tsumo': 12000, 'ron': 24000},
+        8: {'tsumo': 16000, 'ron': 32000},
+        11: {'tsumo': 24000, 'ron': 48000},
+        13: {'tsumo': 32000, 'ron': 64000},
+        26: {'tsumo': 64000, 'ron': 128000},
+        39: {'tsumo': 96000, 'ron': 192000},
+        52: {'tsumo': 128000, 'ron': 256000},
+        65: {'tsumo': 160000, 'ron': 320000},
+    }
+
+    def __init__(self):
+        self._initialize_yaku_checkers()
+
+    def _initialize_yaku_checkers(self):
+        self.yaku_checkers = {
+            '一氣通貫': self._check_ikkitsu,
+            '三色同順': self._check_sanshoku,
+        }
+
+    def parse_hand(self, input_str):
+        tiles = {'m': [], 'p': [], 's': [], 'z': []}
+        input_str = input_str.replace(' ', '').strip()
+        i = 0
+        while i < len(input_str):
+            numbers = []
+            while i < len(input_str) and input_str[i].isdigit():
+                numbers.append(int(input_str[i]))
+                i += 1
+            if i < len(input_str) and input_str[i] in 'mpsz':
+                suit = input_str[i]
+                i += 1
+                for num in numbers:
+                    tiles[suit].append(num)
+        for suit in tiles:
+            tiles[suit].sort()
+        return tiles
+
+    def _count_all(self, tiles):
+        counts = {}
+        for s in tiles:
+            for n in tiles[s]:
+                key = (s, n)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def _is_single_suit(self, tiles):
+        suit_count = sum(1 for suit in ['m', 'p', 's'] if len(tiles[suit]) > 0)
+        return suit_count == 1 and len(tiles['z']) == 0
+
+    def _check_green_only(self, tiles):
+        for s in tiles:
+            for n in tiles[s]:
+                if not ((s == 's' and n in [2, 3, 4, 6, 8]) or (s == 'z' and n == 6)):
+                    return False
+        return sum(len(tiles[s]) for s in tiles) > 0
+
+    def _check_all_honors(self, tiles):
+        for s in ['m', 'p', 's']:
+            if len(tiles[s]) > 0:
+                return False
+        return len(tiles['z']) > 0
+
+    def _check_all_terminals(self, tiles):
+        allowed = {1, 9}
+        for s in tiles:
+            for n in tiles[s]:
+                if s == 'z' or n not in allowed:
+                    return False
+        return sum(len(tiles[s]) for s in tiles) > 0
+
+    def _check_thirteen_orphans(self, tiles):
+        orphans = set()
+        for s in ['m', 'p', 's']:
+            orphans.add((s, 1))
+            orphans.add((s, 9))
+        for i in [1, 5, 6, 7]:
+            orphans.add(('z', i))
+        
+        total = sum(tiles[s].count(n) for s, n in orphans)
+        return total == 14
+
+    def _check_ikkitsu(self, tiles):
+        for suit in ['m', 'p', 's']:
+            if len(tiles[suit]) >= 9:
+                has_full_sequence = all(any(n in tiles[suit] for n in range(i, i+3)) for i in range(1, 8))
+                if has_full_sequence:
+                    return True
+        return False
+
+    def _check_sanshoku(self, tiles):
+        sequences = set()
+        for suit in ['m', 'p', 's']:
+            for i in range(1, 8):
+                if all(n in tiles[suit] for n in [i, i+1, i+2]):
+                    sequences.add(i)
+        return len(sequences) >= 3
+
+    def _check_yakuman(self, tiles):
+        yaku = []
+        counts = self._count_all(tiles)
+        
+        if self._check_green_only(tiles):
+            yaku.append(('綠一色', 13))
+        if self._check_all_honors(tiles):
+            yaku.append(('字一色', 13))
+        if self._check_all_terminals(tiles):
+            yaku.append(('清老頭', 13))
+        if self._check_thirteen_orphans(tiles):
+            yaku.append(('國士無雙', 13))
+        
+        dragons = sum(1 for (s,n),v in counts.items() if s=='z' and n in [5,6,7] and v>=3)
+        winds = sum(1 for (s,n),v in counts.items() if s=='z' and n in [1,2,3,4] and v>=3)
+        triplets = sum(1 for v in counts.values() if v>=3)
+        
+        if dragons == 3:
+            yaku.append(('大三元', 13))
+        if winds == 4:
+            yaku.append(('大四喜', 26))
+        if triplets >= 4:
+            yaku.append(('四暗刻', 13))
+        
+        return yaku
+
+    def _get_multiple(self, total_fan):
+        if total_fan >= 52: return 4
+        elif total_fan >= 39: return 3
+        elif total_fan >= 26: return 2
+        elif total_fan >= 13: return 1
+        return 0
+
+    def calculate_fan(self, tiles, is_tsumo=True, is_menzen=True, is_riichi=False, is_double_riichi=False):
+        total_tiles = sum(len(tiles[s]) for s in tiles)
+        if total_tiles != 14:
+            raise ValueError(f"手牌張數錯誤 ({total_tiles}張)，必須為14張")
+
+        yakuman_list = self._check_yakuman(tiles)
+        if yakuman_list:
+            total_fan = sum(fan for _, fan in yakuman_list)
+            return yakuman_list, total_fan
+
+        pair_count = sum(1 for s in tiles for n in set(tiles[s]) if tiles[s].count(n) == 2)
+        if pair_count == 7:
+            yaku_list = [('七對子', 2)]
+            if is_double_riichi:
+                yaku_list.append(('兩立直', 2))
+            elif is_riichi:
+                yaku_list.append(('立直', 1))
+            return yaku_list, sum(f for _, f in yaku_list)
+
+        yaku_list = []
+        if is_double_riichi:
+            yaku_list.append(('兩立直', 2))
+        elif is_riichi:
+            yaku_list.append(('立直', 1))
+        if is_tsumo and is_menzen:
+            yaku_list.append(('門前清自摸和', 1))
+        
+        if self._check_ikkitsu(tiles):
+            yaku_list.append(('一氣通貫', 2))
+        if self._check_sanshoku(tiles):
+            yaku_list.append(('三色同順', 2))
+        if self._is_single_suit(tiles):
+            yaku_list.append(('清一色', 6))
+        
+        total_fan = sum(f for _, f in yaku_list)
+        return yaku_list or [('無役', 0)], total_fan
+
+    def get_points(self, fan, is_tsumo=True):
+        if fan == 0: return 0
+        if fan >= 65: fan = 65
+        elif fan >= 52: fan = 52
+        elif fan >= 39: fan = 39
+        elif fan >= 26: fan = 26
+        elif fan >= 13: fan = 13
+        pts = self.BASE_POINTS.get(fan, self.BASE_POINTS[1])
+        return pts['tsumo'] if is_tsumo else pts['ron']
+
+class ModernStyle:
+    PRIMARY_COLOR = "#1B4965"
+    SECONDARY_COLOR = "#F18F01"
+    ACCENT_COLOR = "#C73E1D"
+    BG_COLOR = "#F6F5F0"
+    CARD_BG = "#FFFFFF"
+    TEXT_COLOR = "#2C3E50"
+    LIGHT_TEXT = "#95A5A6"
+    SUCCESS_COLOR = "#27AE60"
+    TILE_COLOR = "#FF9800"
+
+class MahjongGUI:
+    TILE_DISPLAY = {
+        'm': {i: f"{i}萬" for i in range(1, 10)},
+        'p': {i: f"{i}筒" for i in range(1, 10)},
+        's': {i: f"{i}索" for i in range(1, 10)},
+        'z': {1: '東', 2: '南', 3: '西', 4: '北', 5: '白', 6: '發', 7: '中'}
+    }
+    
+    def __init__(self, root):
+        self.root = root
+        self.root.title("日本麻將計算器 - 完整版")
+        self.root.geometry("1300x950")  # 加大寬度
+        self.root.configure(bg=ModernStyle.BG_COLOR)
+        
+        self.mahjong = JapaneseMahjong()
+        self.selected_tiles = []
+        self.current_total_fan = 0
+        self.current_multiple = 0
+        
+        self.hand_display_text = "點擊上方按鈕選擇牌 (0/14)"
+        
+        self._setup_ui()
+        self.root.update_idletasks()
+
+    def _setup_ui(self):
+        self._setup_header()
+        
+        main_frame = tk.Frame(self.root, bg=ModernStyle.BG_COLOR)
+        main_frame.pack(fill="both", expand=True, padx=0, pady=15)
+        
+        self._setup_tiles_selection(main_frame)
+        self._setup_control_panel(main_frame)
+        self._setup_result_frame(main_frame)
+
+    def _setup_header(self):
+        header_frame = tk.Frame(self.root, bg=ModernStyle.PRIMARY_COLOR, height=70)
+        header_frame.pack(fill="x", padx=0, pady=0)
+        header_frame.pack_propagate(False)
+        
+        title_label = tk.Label(
+            header_frame, text="🎲 日本麻將計算器 - 完整版",
+            font=("Microsoft JhengHei", 22, "bold"),
+            bg=ModernStyle.PRIMARY_COLOR, fg="white"
+        )
+        title_label.pack(pady=12)
+
+    def _setup_tiles_selection(self, parent):
+        self._create_tile_section(parent, "萬", 'm', range(1, 10))
+        self._create_tile_section(parent, "筒", 'p', range(1, 10))
+        self._create_tile_section(parent, "索", 's', range(1, 10))
+        
+        honor_tiles = [(1, '東'), (2, '南'), (3, '西'), (4, '北'), 
+                       (5, '白'), (6, '發'), (7, '中')]
+        self._create_honor_tile_section(parent, "字牌", 'z', honor_tiles)
+
+    def _create_tile_section(self, parent, name, suit, numbers):
+        section_frame = tk.Frame(parent, bg=ModernStyle.BG_COLOR, height=80)
+        section_frame.pack(fill="x", padx=20, pady=8)
+        section_frame.pack_propagate(False)
+        
+        title_label = tk.Label(
+            section_frame, text=f"● {name}",
+            font=("Microsoft JhengHei", 12, "bold"),
+            bg=ModernStyle.BG_COLOR, fg=ModernStyle.PRIMARY_COLOR, width=6
+        )
+        title_label.pack(side="left", padx=(0, 15))
+        
+        buttons_frame = tk.Frame(section_frame, bg=ModernStyle.BG_COLOR)
+        buttons_frame.pack(side="left", fill="both", expand=True)
+        buttons_frame.pack_propagate(False)
+        
+        for num in numbers:
+            btn = tk.Button(
+                buttons_frame, text=str(num),
+                command=lambda x=num: self._add_tile(suit, x),
+                font=("Microsoft JhengHei", 11, "bold"),
+                bg=ModernStyle.TILE_COLOR, fg="white",
+                activebackground=ModernStyle.SECONDARY_COLOR,
+                relief="flat", padx=14, pady=12, width=4, height=2,
+                cursor="hand2", bd=0
+            )
+            btn.pack(side="left", padx=4)
+
+    def _create_honor_tile_section(self, parent, name, suit, honor_list):
+        section_frame = tk.Frame(parent, bg=ModernStyle.BG_COLOR, height=80)
+        section_frame.pack(fill="x", padx=20, pady=8)
+        section_frame.pack_propagate(False)
+        
+        title_label = tk.Label(
+            section_frame, text=f"● {name}",
+            font=("Microsoft JhengHei", 12, "bold"),
+            bg=ModernStyle.BG_COLOR, fg=ModernStyle.PRIMARY_COLOR, width=6
+        )
+        title_label.pack(side="left", padx=(0, 15))
+        
+        buttons_frame = tk.Frame(section_frame, bg=ModernStyle.BG_COLOR)
+        buttons_frame.pack(side="left", fill="both", expand=True)
+        
+        for num, label in honor_list:
+            btn = tk.Button(
+                buttons_frame, text=label,
+                command=lambda x=num: self._add_tile(suit, x),
+                font=("Microsoft JhengHei", 11, "bold"),
+                bg=ModernStyle.TILE_COLOR, fg="white",
+                activebackground=ModernStyle.SECONDARY_COLOR,
+                relief="flat", padx=14, pady=12, width=4, height=2,
+                cursor="hand2", bd=0
+            )
+            btn.pack(side="left", padx=4)
+
+    def _setup_control_panel(self, parent):
+        control_frame = tk.Frame(parent, bg=ModernStyle.BG_COLOR, height=160)  # 稍微加高
+        control_frame.pack(fill="x", padx=20, pady=(20, 10))
+        control_frame.pack_propagate(False)
+        
+        # 左側：加大當前手牌框框 (500px寬)
+        info_frame = tk.Frame(control_frame, bg=ModernStyle.CARD_BG, width=500)  # 加大！
+        info_frame.pack(side="left", fill="both", expand=False, padx=(0, 15))  # 不擴展
+        info_frame.pack_propagate(False)
+        
+        tk.Label(info_frame, text="當前手牌", font=("Microsoft JhengHei", 10, "bold"),
+                bg=ModernStyle.CARD_BG, fg=ModernStyle.PRIMARY_COLOR
+                ).pack(anchor="w", padx=12, pady=(10, 6))
+        
+        self.hand_display = tk.Label(
+            info_frame, text=self.hand_display_text,
+            font=("Microsoft JhengHei", 10), bg=ModernStyle.CARD_BG,
+            fg=ModernStyle.TEXT_COLOR, justify="left", wraplength=470,  # 配合500px寬
+            height=8, anchor="nw", relief="solid", borderwidth=1  # 加邊框更明顯
+        )
+        self.hand_display.pack(fill="both", expand=True, padx=12, pady=(6, 10))
+        
+        # 中右側：緊密排列的選項+按鈕區
+        right_frame = tk.Frame(control_frame, bg=ModernStyle.BG_COLOR)
+        right_frame.pack(side="right", fill="both", expand=True, padx=(0, 0))
+        
+        # 上方：計算選項（貼近按鈕）
+        option_frame = tk.Frame(right_frame, bg=ModernStyle.CARD_BG)
+        option_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))  # 貼近按鈕
+        
+        tk.Label(option_frame, text="計算選項", font=("Microsoft JhengHei", 10, "bold"),
+                bg=ModernStyle.CARD_BG, fg=ModernStyle.PRIMARY_COLOR
+                ).pack(anchor="w", padx=12, pady=(10, 6))
+        
+        options_inner = tk.Frame(option_frame, bg=ModernStyle.CARD_BG)
+        options_inner.pack(fill="both", expand=True, padx=12, pady=(6, 10))
+        
+        self.is_tsumo = tk.BooleanVar(value=True)
+        self.is_menzen = tk.BooleanVar(value=True)
+        self.is_riichi = tk.BooleanVar(value=False)
+        self.is_double_riichi = tk.BooleanVar(value=False)
+        
+        checkbox_style = {
+            'bg': ModernStyle.CARD_BG, 'fg': ModernStyle.TEXT_COLOR,
+            'font': ("Microsoft JhengHei", 9),
+            'activebackground': ModernStyle.CARD_BG,
+            'activeforeground': ModernStyle.PRIMARY_COLOR,
+            'selectcolor': ModernStyle.CARD_BG
+        }
+        
+        tk.Checkbutton(options_inner, text="自摸", variable=self.is_tsumo, **checkbox_style).pack(anchor="w")
+        tk.Checkbutton(options_inner, text="門前清", variable=self.is_menzen, **checkbox_style).pack(anchor="w")
+        tk.Checkbutton(options_inner, text="立直", variable=self.is_riichi, **checkbox_style).pack(anchor="w")
+        tk.Checkbutton(options_inner, text="兩立直", variable=self.is_double_riichi, **checkbox_style).pack(anchor="w")
+        
+        # 右側：按鈕區（垂直排列）
+        button_frame = tk.Frame(right_frame, bg=ModernStyle.BG_COLOR, width=220)
+        button_frame.pack(side="right", fill="y", padx=(0, 0))
+        button_frame.pack_propagate(False)
+        
+        # 大計算按鈕
+        tk.Button(button_frame, text="🧮 計 算", command=self.calculate,
+                 font=("Microsoft JhengHei", 13, "bold"), bg=ModernStyle.PRIMARY_COLOR,
+                 fg="white", activebackground="#143852", relief="flat",
+                 padx=25, pady=18, cursor="hand2", bd=0, height=2
+                ).pack(fill="x", pady=(0, 8))
+        
+        # 小按鈕水平排列
+        small_btn_frame = tk.Frame(button_frame, bg=ModernStyle.BG_COLOR)
+        small_btn_frame.pack(fill="x")
+        
+        tk.Button(small_btn_frame, text="↶ 撤銷", command=self._remove_last_tile,
+                 font=("Microsoft JhengHei", 10, "bold"), bg=ModernStyle.LIGHT_TEXT,
+                 fg="white", activebackground="#7F8C8D", relief="flat",
+                 padx=18, pady=12, cursor="hand2", bd=0
+                ).pack(side="left", fill="both", expand=True, padx=(0, 4))
+        
+        tk.Button(small_btn_frame, text="🗑 清空", command=self._clear_all,
+                 font=("Microsoft JhengHei", 10, "bold"), bg=ModernStyle.ACCENT_COLOR,
+                 fg="white", activebackground="#A72C1A", relief="flat",
+                 padx=18, pady=12, cursor="hand2", bd=0
+                ).pack(side="right", fill="both", expand=True, padx=(4, 0))
+
+    def _setup_result_frame(self, parent):
+        result_frame = tk.Frame(parent, bg=ModernStyle.CARD_BG)
+        result_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        tk.Label(result_frame, text="計算結果", font=("Microsoft JhengHei", 11, "bold"),
+                bg=ModernStyle.CARD_BG, fg=ModernStyle.PRIMARY_COLOR
+                ).pack(anchor="w", padx=12, pady=(10, 6))
+        
+        text_frame = tk.Frame(result_frame, bg=ModernStyle.CARD_BG)
+        text_frame.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+        
+        self.result_text = tk.Text(
+            text_frame, font=("Microsoft JhengHei", 10),
+            bg=ModernStyle.CARD_BG, fg=ModernStyle.TEXT_COLOR,
+            relief="flat", padx=10, pady=10, wrap="word", height=14
+        )
+        self.result_text.pack(side="left", fill="both", expand=True)
+        self.result_text.config(state="disabled")
+        
+        scrollbar = tk.Scrollbar(text_frame, command=self.result_text.yview, bg=ModernStyle.BG_COLOR)
+        scrollbar.pack(side="right", fill="y")
+        self.result_text.config(yscrollcommand=scrollbar.set)
+        
+        self.result_text.tag_config("title", foreground=ModernStyle.PRIMARY_COLOR, font=("Microsoft JhengHei", 10, "bold"))
+        self.result_text.tag_config("yaku", foreground=ModernStyle.SUCCESS_COLOR, font=("Microsoft JhengHei", 10))
+        self.result_text.tag_config("yakuman", foreground=ModernStyle.ACCENT_COLOR, font=("Microsoft JhengHei", 10, "bold"))
+        self.result_text.tag_config("points", foreground=ModernStyle.SECONDARY_COLOR, font=("Microsoft JhengHei", 10, "bold"))
+        self.result_text.tag_config("error", foreground=ModernStyle.ACCENT_COLOR)
+
+    def _add_tile(self, suit, number):
+        if len(self.selected_tiles) < 14:
+            self.selected_tiles.append((suit, number))
+            self._update_hand_display()
+
+    def _remove_last_tile(self):
+        if self.selected_tiles:
+            self.selected_tiles.pop()
+            self._update_hand_display()
+
+    def _clear_all(self):
+        self.selected_tiles = []
+        self._update_hand_display()
+        self.result_text.config(state="normal")
+        self.result_text.delete("1.0", "end")
+        self.result_text.config(state="disabled")
+
+    def _update_hand_display(self):
+        tiles_by_suit = {'m': [], 'p': [], 's': [], 'z': []}
+        for suit, num in self.selected_tiles:
+            tiles_by_suit[suit].append(num)
+        
+        display_text = ""
+        suit_icons = {'m': '🔴', 'p': '🟡', 's': '🟢', 'z': '⚪'}
+        suit_names = {'m': '萬', 'p': '筒', 's': '索', 'z': '字牌'}
+        
+        for suit in ['m', 'p', 's', 'z']:
+            if tiles_by_suit[suit]:
+                nums = ' '.join(map(str, sorted(tiles_by_suit[suit])))
+                display_text += f"{suit_icons[suit]} {suit_names[suit]}: {nums}\n"
+        
+        if not display_text.strip():
+            display_text = "點擊上方按鈕選擇牌"
+        else:
+            display_text += f"\n({len(self.selected_tiles)}/14)"
+        
+        self.hand_display.config(text=display_text)
+
+    def _insert_result(self, text: str, tag: str = ""):
+        self.result_text.config(state="normal")
+        self.result_text.insert("end", text, tag)
+        self.result_text.config(state="disabled")
+
+    def calculate(self):
+        if len(self.selected_tiles) != 14:
+            messagebox.showwarning("警告", f"手牌數量錯誤\n需要14張，目前{len(self.selected_tiles)}張")
+            return
+        
+        try:
+            tiles = {'m': [], 'p': [], 's': [], 'z': []}
+            for suit, num in self.selected_tiles:
+                tiles[suit].append(num)
+            for suit in tiles:
+                tiles[suit].sort()
+            
+            double_riichi = self.is_double_riichi.get()
+            riichi = self.is_riichi.get() and not double_riichi
+            
+            yaku_list, total_fan = self.mahjong.calculate_fan(
+                tiles, self.is_tsumo.get(), self.is_menzen.get(), riichi, double_riichi
+            )
+            
+            self.current_total_fan = total_fan
+            self.current_multiple = self.mahjong._get_multiple(total_fan)
+            points_tsumo = self.mahjong.get_points(total_fan, True)
+            points_ron = self.mahjong.get_points(total_fan, False)
+            
+            self.result_text.config(state="normal")
+            self.result_text.delete("1.0", "end")
+            
+            self._insert_result("╔════════════════════╗\n", "title")
+            self._insert_result("║   完整役種計算結果  ║\n", "title")
+            self._insert_result("╚════════════════════╝\n\n", "title")
+            
+            self._insert_result("【 手牌 】\n", "title")
+            suit_icons = {'m': '🔴', 'p': '🟡', 's': '🟢', 'z': '⚪'}
+            suit_names = {'m': '萬', 'p': '筒', 's': '索', 'z': '字'}
+            for suit in ['m', 'p', 's', 'z']:
+                if tiles[suit]:
+                    self._insert_result(f"  {suit_icons[suit]} {suit_names[suit]}: ")
+                    for num in tiles[suit]:
+                        self._insert_result(f"{num} ")
+                    self._insert_result("\n")
+            
+            self._insert_result("\n【 役種 】\n", "title")
+            for yaku, fan in yaku_list:
+                tag = "yakuman" if fan >= 13 else "yaku"
+                self._insert_result(f"  ✓ {yaku} ({fan}番)\n", tag)
+            
+            self._insert_result(f"\n【 役滿等級 】\n", "title")
+            if self.current_multiple >= 1:
+                self._insert_result(f"  🔥 {self.current_multiple}倍役滿！🔥\n", "yakuman")
+                self._insert_result(f"  總翻數：{total_fan}番\n\n", "points")
+            else:
+                self._insert_result(f"  總翻數：{total_fan}番\n\n", "points")
+            
+            self._insert_result(f"【 得點 】\n", "title")
+            self._insert_result(f"  自摸: {points_tsumo:,} 點\n", "points")
+            self._insert_result(f"  放槍: {points_ron:,} 點\n", "points")
+            
+            self.result_text.config(state="disabled")
+            
+            if self.current_multiple >= 1:
+                self.root.title(f"日本麻將計算器 - {self.current_multiple}倍役滿！🎆")
+            else:
+                self.root.title("日本麻將計算器 - 完整版")
+            
+        except Exception as e:
+            self.result_text.config(state="normal")
+            self.result_text.delete("1.0", "end")
+            self.result_text.config(state="disabled")
+            self._insert_result(f"❌ 發生錯誤: {str(e)}", "error")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    gui = MahjongGUI(root)
+    root.mainloop()
